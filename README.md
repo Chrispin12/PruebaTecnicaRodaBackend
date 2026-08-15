@@ -417,7 +417,7 @@ Navegador → Vercel (SPA) → Cloud Run (esta API) → Cloud SQL (PostgreSQL 16
 | Proyecto GCP | `roda-credit-cs0603` |
 | Región | `us-central1` |
 | Servicio Cloud Run | `roda-credit-api` |
-| Imagen | `us-central1-docker.pkg.dev/roda-credit-cs0603/roda/roda-credit-api:v2` |
+| Imagen | `us-central1-docker.pkg.dev/roda-credit-cs0603/roda/roda-credit-api:v3` |
 | Instancia Cloud SQL | `roda-pg` (PostgreSQL 16, Enterprise, `db-f1-micro`) |
 | Conexión | `roda-credit-cs0603:us-central1:roda-pg` |
 | Base / usuario | `roda` / `roda_app` |
