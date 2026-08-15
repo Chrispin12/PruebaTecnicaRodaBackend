@@ -4,8 +4,15 @@ API REST para simular y registrar solicitudes de crédito de bicicletas y motos 
 
 Prueba técnica — vacante Full Stack Developer (Roda).
 
-El cliente web vive en un repositorio aparte:
-[PruebaTecnicaRodaFrontend](https://github.com/Chrispin12/PruebaTecnicaRodaFrontend).
+**API en producción:** [https://roda-credit-api-446921260054.us-central1.run.app](https://roda-credit-api-446921260054.us-central1.run.app)
+
+| Recurso | URL |
+| --- | --- |
+| Health | [GET /health](https://roda-credit-api-446921260054.us-central1.run.app/health) |
+| OpenAPI | [/docs](https://roda-credit-api-446921260054.us-central1.run.app/docs) |
+| Frontend | [prueba-tecnica-roda-frontend.vercel.app](https://prueba-tecnica-roda-frontend.vercel.app) |
+
+El cliente web: [PruebaTecnicaRodaFrontend](https://github.com/Chrispin12/PruebaTecnicaRodaFrontend).
 
 Esta API es la **única fuente de verdad financiera**. Calcula cuota, intereses, valor
 financiado, totales y tabla de amortización. El frontend solo captura datos, llama a estos
@@ -383,16 +390,72 @@ que el cliente no pueda imponer la cuota), salud, CORS en producción y pureza d
 
 ## Producción (Cloud Run + Cloud SQL)
 
+**URL pública de la API:**
+[https://roda-credit-api-446921260054.us-central1.run.app](https://roda-credit-api-446921260054.us-central1.run.app)
+
+Informe de la prueba: [`INFORME_TECNICO.md`](./INFORME_TECNICO.md).
+
 ```
-Frontend (Vercel) → esta API (Cloud Run) → PostgreSQL (Cloud SQL)
+Navegador → Vercel (SPA) → Cloud Run (esta API) → Cloud SQL (PostgreSQL 16)
 ```
+
+### Cómo está desplegado este entorno
+
+| Recurso | Valor |
+| --- | --- |
+| Proyecto GCP | `roda-credit-cs0603` |
+| Región | `us-central1` |
+| Servicio Cloud Run | `roda-credit-api` |
+| Imagen | `us-central1-docker.pkg.dev/roda-credit-cs0603/roda/roda-credit-api:v1` |
+| Instancia Cloud SQL | `roda-pg` (PostgreSQL 16, Enterprise, `db-f1-micro`) |
+| Conexión | `roda-credit-cs0603:us-central1:roda-pg` |
+| Base / usuario | `roda` / `roda_app` |
+| Secret | `roda-database-url` (inyectado como `DATABASE_URL`) |
+| Job de migraciones | `roda-credit-migrate` (`alembic upgrade head`) |
+| CORS | `https://prueba-tecnica-roda-frontend.vercel.app` |
+
+### Cómo se almacena la información
+
+1. El usuario simula (`POST /api/v1/simulations`): **no se escribe en base de datos**.
+2. El usuario solicita crédito (`POST /api/v1/credit-applications`): el servidor **recalcula**
+   el plan y, en una transacción, inserta **una fila** en `credit_applications`.
+3. Esa fila guarda datos personales, condiciones del vehículo, tasas usadas y resultado
+   financiero (cuota, intereses, totales). **No** se guarda la tabla de amortización: se
+   puede regenerar con el motor.
+4. Cloud Run llega a Cloud SQL por **socket Unix** del sidecar `/cloudsql/...`, no por IP
+   pública. La contraseña no está en el código: vive en Secret Manager.
+
+```
+postgresql+psycopg://USER:PASSWORD@/DBNAME?host=/cloudsql/PROJECT:REGION:INSTANCE
+```
+
+Consultar filas (Cloud Shell / gcloud):
+
+```bash
+gcloud sql connect roda-pg --user=roda_app --database=roda --project=roda-credit-cs0603
+```
+
+```sql
+SELECT id, first_name, last_name, email, vehicle_type, monthly_payment, created_at
+FROM credit_applications
+ORDER BY created_at DESC
+LIMIT 10;
+```
+
+### Proceso de despliegue (resumen)
+
+1. Crear instancia Cloud SQL y base `roda`.
+2. Guardar `DATABASE_URL` en Secret Manager.
+3. Construir y subir la imagen a Artifact Registry.
+4. Ejecutar el Job `roda-credit-migrate` (Alembic). **No** migrar en el arranque del servicio.
+5. Desplegar `roda-credit-api` con Cloud SQL, secreto, `ENVIRONMENT=production` y CORS.
+6. Apuntar Vercel (`VITE_API_URL`) a esta URL y redesplegar el frontend.
 
 - Contenedor stateless, `PORT` inyectado, pool pequeño (`5` + overflow `5`, recycle 30 min).
-- Socket Unix: `postgresql+psycopg://USER:PASSWORD@/DBNAME?host=/cloudsql/PROJECT:REGION:INSTANCE`
-- Secretos en Secret Manager (`--set-secrets`).
-- Migraciones: Job `alembic upgrade head`, luego el servicio HTTP.
+- `--proxy-headers` porque Cloud Run termina TLS.
+- `--allow-unauthenticated`: el enunciado no pide login.
 
-Esquema de comandos (sustituir placeholders; no hay IDs inventados):
+Esquema de comandos (referencia; este entorno ya está creado):
 
 ```bash
 docker build -t REGION-docker.pkg.dev/PROJECT/REPO/roda-credit-api:TAG .
@@ -435,3 +498,5 @@ Autenticación, JWT, KYC, documento de identidad, CRUD de solicitudes, microserv
 ## Licencia / contexto
 
 Código de prueba técnica. Los supuestos financieros no representan productos reales de Roda.
+
+Informe completo: [`INFORME_TECNICO.md`](./INFORME_TECNICO.md).
