@@ -23,9 +23,11 @@ endpoints y muestra la respuesta.
 ## Qué resuelve
 
 Una persona indica tipo de vehículo, valor, cuota inicial y plazo. Recibe un plan de pagos.
-Si decide continuar, registra nombre, apellido, correo, teléfono y ciudad. Esa solicitud queda
-persistida en PostgreSQL junto con las condiciones y el resultado financiero **recalculado en
-el servidor** (nunca se confía en cifras enviadas por el cliente).
+Si decide continuar, registra nombre, apellido, documento de identidad, correo, teléfono y
+ciudad. Esa solicitud queda persistida en PostgreSQL junto con las condiciones y el resultado
+financiero **recalculado en el servidor** (nunca se confía en cifras enviadas por el cliente).
+La cédula identifica al cliente: puede tener varios créditos; el correo puede cambiar; nombre
+y contacto de la primera solicitud no se pisan.
 
 Cumple el enunciado:
 
@@ -256,7 +258,14 @@ Request → Schema → CreditApplicationService → Credit Engine
 ```
 
 **Response `201`:** `id`, `customer_id`, `created_at`, datos del solicitante, condiciones y
-resultado financiero persistido. No incluye `schedule`. El mismo email reutiliza el cliente.
+resultado financiero persistido. No incluye `schedule`.
+
+Identidad (sin JWT):
+
+- Misma cédula + mismos nombre/apellido → mismo cliente, N créditos.
+- El correo puede cambiar si no lo usa otra cédula.
+- Nombre, teléfono y ciudad de la **primera** solicitud se conservan.
+- Mismo correo con **otra** cédula, o nombre que no coincide con la cédula: `400`.
 
 Transacción atómica. Si falla la persistencia: rollback, `500` genérico al cliente, detalle
 solo en logs.
@@ -331,7 +340,9 @@ Dos tablas: `customers` (identidad, email único) y `credit_applications` (cada 
 cliente). Un cliente puede tener varias solicitudes. El vehículo queda como snapshot en la
 solicitud (tipo + valor): no hay inventario ni placa, así que no hay tabla `vehicles`.
 
-No hay login. El mismo correo reutiliza el cliente (upsert) y actualiza teléfono/ciudad.
+No hay login. La cédula identifica al cliente: N solicitudes, el correo puede cambiar si
+está libre. Nombre, teléfono y ciudad quedan de la **primera** solicitud. El mismo correo
+con otra cédula se rechaza.
 
 | Tabla | Qué guarda |
 | --- | --- |
@@ -418,10 +429,10 @@ Navegador → Vercel (SPA) → Cloud Run (esta API) → Cloud SQL (PostgreSQL 16
 
 1. El usuario simula (`POST /api/v1/simulations`): **no se escribe en base de datos**.
 2. El usuario solicita crédito (`POST /api/v1/credit-applications`): el servidor **recalcula**
-   el plan y, en una transacción, hace **upsert del cliente** (documento / correo) e inserta
-   una fila en `credit_applications`.
-3. En `customers` queda la identidad (documento, email, contacto). En la solicitud quedan
-   condiciones del vehículo, tasas y resultado. **No** se guarda la amortización.
+   el plan y, en una transacción, resuelve el cliente por **cédula** (alta o reutilización) e
+   inserta una fila en `credit_applications`. El correo se actualiza si cambió y está libre.
+3. En `customers` queda la identidad. Nombre/teléfono/ciudad no se pisan después del primer
+   registro. En la solicitud quedan vehículo, tasas y resultado. **No** se guarda la amortización.
 4. Cloud Run llega a Cloud SQL por **socket Unix** del sidecar `/cloudsql/...`, no por IP
    pública. La contraseña no está en el código: vive en Secret Manager.
 

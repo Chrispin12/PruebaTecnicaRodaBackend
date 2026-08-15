@@ -13,6 +13,7 @@ from app.core.exceptions import BusinessRuleError
 from app.domain.applicant import Applicant
 from app.domain.credit_engine import CreditPlan
 from app.domain.credit_terms import CreditTerms
+from app.domain.identity import names_match
 from app.domain.interest import quantize_rate
 from app.models.credit_application import CreditApplication
 from app.models.customer import Customer
@@ -20,7 +21,10 @@ from app.models.customer import Customer
 logger = logging.getLogger(__name__)
 
 _EMAIL_TAKEN = "Este correo electronico ya esta asociado a otro documento de identidad."
-_DOCUMENT_TAKEN = "Este documento de identidad ya esta asociado a otro correo electronico."
+_IDENTITY_MISMATCH = (
+    "Los datos no coinciden con la cedula ya registrada. "
+    "Nombre y apellido deben ser los de la primera solicitud."
+)
 
 
 class CreditApplicationRepository:
@@ -80,13 +84,17 @@ class CreditApplicationRepository:
             raise BusinessRuleError(_EMAIL_TAKEN)
 
         if by_document is not None:
+            if not names_match(by_document.first_name, applicant.first_name) or not names_match(
+                by_document.last_name, applicant.last_name
+            ):
+                raise BusinessRuleError(_IDENTITY_MISMATCH)
             if by_email is not None and by_email.id != by_document.id:
                 raise BusinessRuleError(_EMAIL_TAKEN)
-            self._apply_profile(by_document, applicant, email)
+            by_document.email = email
             return by_document
 
         if by_email is not None:
-            raise BusinessRuleError(_DOCUMENT_TAKEN)
+            raise BusinessRuleError(_EMAIL_TAKEN)
 
         customer = Customer(
             first_name=applicant.first_name,
@@ -100,11 +108,3 @@ class CreditApplicationRepository:
         self._session.add(customer)
         self._session.flush()
         return customer
-
-    @staticmethod
-    def _apply_profile(customer: Customer, applicant: Applicant, email: str) -> None:
-        customer.first_name = applicant.first_name
-        customer.last_name = applicant.last_name
-        customer.email = email
-        customer.phone = applicant.phone
-        customer.city = applicant.city

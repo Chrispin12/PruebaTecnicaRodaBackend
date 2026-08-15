@@ -24,6 +24,10 @@ def normalize_document_number(document_type: DocumentType, raw: str) -> str:
     return re.sub(r"[^A-Z0-9]", "", compact)
 
 
+def names_match(left: str, right: str) -> bool:
+    return left.casefold().strip() == right.casefold().strip()
+
+
 def is_valid_document_number(document_type: DocumentType, number: str) -> bool:
     if document_type is DocumentType.CC:
         return bool(_CC_PATTERN.fullmatch(number))

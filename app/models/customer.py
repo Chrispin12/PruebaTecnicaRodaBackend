@@ -25,9 +25,9 @@ _ALLOWED_DOCUMENT_TYPES = ", ".join(f"'{member.value}'" for member in DocumentTy
 class Customer(Base):
     """Persona que solicita credito.
 
-    Identidad: documento (tipo + numero) unico. El correo tambien es unico. Un cliente tiene
-    N solicitudes. No hay login ni listado publico: el funnel resuelve al cliente por
-    documento o por correo al registrar.
+    Identidad: documento (tipo + numero) unico. El correo tambien es unico y puede
+    actualizarse en solicitudes posteriores de la misma cedula. Nombre, apellido, telefono
+    y ciudad quedan fijos desde el primer registro. Un cliente tiene N solicitudes.
     """
 
     __tablename__ = "customers"

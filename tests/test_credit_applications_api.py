@@ -362,21 +362,50 @@ class TestCustomerRelationship:
         assert len(customers) == 1
         assert len(applications) == 2
 
-    def test_updates_contact_details_on_the_existing_customer(
+    def test_keeps_the_first_profile_when_the_same_document_applies_again(
         self, client: TestClient, db_session: Session
     ) -> None:
         client.post(APPLICATIONS_URL, json=valid_payload())
-        client.post(
+        response = client.post(
             APPLICATIONS_URL,
             json=valid_payload(phone="3109876543", city="Medellin"),
         )
 
+        assert response.status_code == 201
         customer = db_session.scalar(
-            select(Customer).where(Customer.email == "laura.gomez@example.com")
+            select(Customer).where(Customer.document_number == "1023456789")
         )
         assert customer is not None
-        assert customer.phone == "3109876543"
-        assert customer.city == "Medellin"
+        assert customer.phone == "3001234567"
+        assert customer.city == "Bogota"
+        assert customer.first_name == "Laura"
+
+    def test_allows_a_new_email_on_the_same_document(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        first = client.post(APPLICATIONS_URL, json=valid_payload()).json()
+        second = client.post(
+            APPLICATIONS_URL,
+            json=valid_payload(email="laura.nueva@example.com"),
+        ).json()
+
+        assert first["customer_id"] == second["customer_id"]
+        assert second["email"] == "laura.nueva@example.com"
+        assert stored_applications(db_session) == 2
+        assert db_session.scalar(select(func.count()).select_from(Customer)) == 1
+
+    def test_rejects_a_name_that_does_not_match_the_registered_document(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        client.post(APPLICATIONS_URL, json=valid_payload())
+        response = client.post(
+            APPLICATIONS_URL,
+            json=valid_payload(first_name="Pedro", last_name="Perez"),
+        )
+
+        assert response.status_code == 400
+        assert "cedula" in response.json()["error"]["message"].lower()
+        assert stored_applications(db_session) == 1
 
     def test_normalizes_email_case_to_reuse_the_customer(
         self, client: TestClient, db_session: Session
@@ -401,10 +430,10 @@ class TestCustomerRelationship:
         )
 
         assert response.status_code == 400
-        assert "documento" in response.json()["error"]["message"].lower()
+        assert "correo" in response.json()["error"]["message"].lower()
         assert stored_applications(db_session) == 1
 
-    def test_rejects_the_same_document_bound_to_another_email(
+    def test_allows_the_same_document_with_a_new_email(
         self, client: TestClient, db_session: Session
     ) -> None:
         client.post(APPLICATIONS_URL, json=valid_payload())
@@ -416,10 +445,10 @@ class TestCustomerRelationship:
             ),
         )
 
-        # Mismo documento: se reutiliza el cliente y se actualiza el correo si esta libre.
         assert response.status_code == 201
         assert stored_applications(db_session) == 2
         assert db_session.scalar(select(func.count()).select_from(Customer)) == 1
+        assert response.json()["email"] == "otra.persona@example.com"
 
     def test_rejects_an_invalid_national_id(self, client: TestClient) -> None:
         response = client.post(
