@@ -430,7 +430,42 @@ class TestCustomerRelationship:
         )
 
         assert response.status_code == 400
-        assert "correo" in response.json()["error"]["message"].lower()
+        assert "otra cedula" in response.json()["error"]["message"].lower()
+        assert stored_applications(db_session) == 1
+
+    def test_rejects_the_same_person_with_a_different_document_and_email(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        client.post(APPLICATIONS_URL, json=valid_payload())
+        response = client.post(
+            APPLICATIONS_URL,
+            json=valid_payload(
+                document_number="1098765432",
+                email="laura.otra@example.com",
+                phone="3110000000",
+            ),
+        )
+
+        assert response.status_code == 400
+        assert "otra cedula" in response.json()["error"]["message"].lower()
+        assert stored_applications(db_session) == 1
+        assert db_session.scalar(select(func.count()).select_from(Customer)) == 1
+
+    def test_rejects_the_same_phone_with_a_different_document(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        client.post(APPLICATIONS_URL, json=valid_payload())
+        response = client.post(
+            APPLICATIONS_URL,
+            json=valid_payload(
+                first_name="Pedro",
+                last_name="Perez",
+                document_number="1098765432",
+                email="pedro.perez@example.com",
+            ),
+        )
+
+        assert response.status_code == 400
         assert stored_applications(db_session) == 1
 
     def test_allows_the_same_document_with_a_new_email(

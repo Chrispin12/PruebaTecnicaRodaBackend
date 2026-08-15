@@ -28,6 +28,8 @@ class Customer(Base):
     Identidad: documento (tipo + numero) unico. El correo tambien es unico y puede
     actualizarse en solicitudes posteriores de la misma cedula. Nombre, apellido, telefono
     y ciudad quedan fijos desde el primer registro. Un cliente tiene N solicitudes.
+    No se crea un segundo cliente si el nombre, el correo o el telefono ya existen
+    con otra cedula.
     """
 
     __tablename__ = "customers"

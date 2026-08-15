@@ -5,7 +5,7 @@ Un commit atomico cubre el upsert del cliente (documento / correo) y el INSERT d
 
 import logging
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -21,6 +21,10 @@ from app.models.customer import Customer
 logger = logging.getLogger(__name__)
 
 _EMAIL_TAKEN = "Este correo electronico ya esta asociado a otro documento de identidad."
+_IDENTITY_ALREADY_REGISTERED = (
+    "Esta persona ya esta registrada con otra cedula. "
+    "Un usuario solo puede tener un documento de identidad."
+)
 _IDENTITY_MISMATCH = (
     "Los datos no coinciden con la cedula ya registrada. "
     "Nombre y apellido deben ser los de la primera solicitud."
@@ -61,7 +65,7 @@ class CreditApplicationRepository:
         except IntegrityError:
             self._session.rollback()
             logger.info("Conflicto de unicidad al persistir cliente o solicitud")
-            raise BusinessRuleError(_EMAIL_TAKEN) from None
+            raise BusinessRuleError(_IDENTITY_ALREADY_REGISTERED) from None
         except SQLAlchemyError:
             self._session.rollback()
             logger.exception("Fallo al persistir la solicitud de credito")
@@ -94,7 +98,20 @@ class CreditApplicationRepository:
             return by_document
 
         if by_email is not None:
-            raise BusinessRuleError(_EMAIL_TAKEN)
+            raise BusinessRuleError(_IDENTITY_ALREADY_REGISTERED)
+
+        by_phone = self._session.scalar(select(Customer).where(Customer.phone == applicant.phone))
+        if by_phone is not None:
+            raise BusinessRuleError(_IDENTITY_ALREADY_REGISTERED)
+
+        by_name = self._session.scalar(
+            select(Customer).where(
+                func.lower(Customer.first_name) == applicant.first_name.casefold().strip(),
+                func.lower(Customer.last_name) == applicant.last_name.casefold().strip(),
+            )
+        )
+        if by_name is not None:
+            raise BusinessRuleError(_IDENTITY_ALREADY_REGISTERED)
 
         customer = Customer(
             first_name=applicant.first_name,

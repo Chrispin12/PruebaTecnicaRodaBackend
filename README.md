@@ -26,8 +26,8 @@ Una persona indica tipo de vehículo, valor, cuota inicial y plazo. Recibe un pl
 Si decide continuar, registra nombre, apellido, documento de identidad, correo, teléfono y
 ciudad. Esa solicitud queda persistida en PostgreSQL junto con las condiciones y el resultado
 financiero **recalculado en el servidor** (nunca se confía en cifras enviadas por el cliente).
-La cédula identifica al cliente: puede tener varios créditos; el correo puede cambiar; nombre
-y contacto de la primera solicitud no se pisan.
+Cada cédula se registra **una sola vez**. Con esa cédula, el mismo nombre y apellido pueden
+pedir más créditos. La misma persona no puede pedir crédito con **otra** cédula.
 
 Cumple el enunciado:
 
@@ -260,12 +260,8 @@ Request → Schema → CreditApplicationService → Credit Engine
 **Response `201`:** `id`, `customer_id`, `created_at`, datos del solicitante, condiciones y
 resultado financiero persistido. No incluye `schedule`.
 
-Identidad (sin JWT):
-
-- Misma cédula + mismos nombre/apellido → mismo cliente, N créditos.
-- El correo puede cambiar si no lo usa otra cédula.
-- Nombre, teléfono y ciudad de la **primera** solicitud se conservan.
-- Mismo correo con **otra** cédula, o nombre que no coincide con la cédula: `400`.
+Identidad (sin JWT): ver la sección **Identidad del cliente**. En resumen: misma cédula +
+nombre correcto → 201; misma ficha (nombre, correo o teléfono) con **otra** cédula → 400.
 
 Transacción atómica. Si falla la persistencia: rollback, `500` genérico al cliente, detalle
 solo en logs.
@@ -334,15 +330,28 @@ condición comercial de Roda.**
 
 ---
 
+## Identidad del cliente
+
+No hay login. El documento (tipo + número) es la llave del cliente. Una cédula = un
+registro en `customers`. Ese cliente puede tener **N** filas en `credit_applications`.
+
+| Situación | Resultado |
+| --- | --- |
+| Primera solicitud con una cédula nueva | `201`. Se crea el cliente con nombre, apellido, correo, teléfono y ciudad. |
+| Misma cédula + mismos nombre y apellido | `201`. Mismo `customer_id`, nuevo crédito. El correo puede actualizarse si está libre. Teléfono y ciudad **no** se pisan. |
+| Misma cédula + nombre o apellido distintos | `400`. Los datos deben ser los de la primera solicitud. |
+| Otra cédula, pero el mismo nombre y apellido, el mismo correo o el mismo teléfono | `400`. Esa persona ya está ligada a un documento. |
+| Cédula, nombre, correo y teléfono que no existen | `201`. Es otro cliente. |
+
+Mensaje de rechazo típico: *Esta persona ya esta registrada con otra cedula.*
+
+---
+
 ## Modelo de datos
 
-Dos tablas: `customers` (identidad, email único) y `credit_applications` (cada crédito, FK a
-cliente). Un cliente puede tener varias solicitudes. El vehículo queda como snapshot en la
-solicitud (tipo + valor): no hay inventario ni placa, así que no hay tabla `vehicles`.
-
-No hay login. La cédula identifica al cliente: N solicitudes, el correo puede cambiar si
-está libre. Nombre, teléfono y ciudad quedan de la **primera** solicitud. El mismo correo
-con otra cédula se rechaza.
+Dos tablas: `customers` (identidad) y `credit_applications` (cada crédito, FK a cliente).
+El vehículo queda como snapshot (tipo + valor): no hay inventario ni placa, así que no hay
+tabla `vehicles`.
 
 | Tabla | Qué guarda |
 | --- | --- |
@@ -417,7 +426,7 @@ Navegador → Vercel (SPA) → Cloud Run (esta API) → Cloud SQL (PostgreSQL 16
 | Proyecto GCP | `roda-credit-cs0603` |
 | Región | `us-central1` |
 | Servicio Cloud Run | `roda-credit-api` |
-| Imagen | `us-central1-docker.pkg.dev/roda-credit-cs0603/roda/roda-credit-api:v3` |
+| Imagen | `us-central1-docker.pkg.dev/roda-credit-cs0603/roda/roda-credit-api:v4` |
 | Instancia Cloud SQL | `roda-pg` (PostgreSQL 16, Enterprise, `db-f1-micro`) |
 | Conexión | `roda-credit-cs0603:us-central1:roda-pg` |
 | Base / usuario | `roda` / `roda_app` |
@@ -429,10 +438,13 @@ Navegador → Vercel (SPA) → Cloud Run (esta API) → Cloud SQL (PostgreSQL 16
 
 1. El usuario simula (`POST /api/v1/simulations`): **no se escribe en base de datos**.
 2. El usuario solicita crédito (`POST /api/v1/credit-applications`): el servidor **recalcula**
-   el plan y, en una transacción, resuelve el cliente por **cédula** (alta o reutilización) e
-   inserta una fila en `credit_applications`. El correo se actualiza si cambió y está libre.
-3. En `customers` queda la identidad. Nombre/teléfono/ciudad no se pisan después del primer
-   registro. En la solicitud quedan vehículo, tasas y resultado. **No** se guarda la amortización.
+   el plan y, en una transacción, resuelve el cliente por **cédula**. Si la cédula es nueva
+   pero nombre, correo o teléfono ya existen, responde `400`. Si la cédula existe y el
+   nombre coincide, reutiliza el cliente e inserta el crédito. El correo se actualiza si
+   cambió y está libre.
+3. En `customers` queda la identidad. Nombre, teléfono y ciudad no se pisan después del
+   primer registro. En la solicitud quedan vehículo, tasas y resultado. **No** se guarda la
+   amortización.
 4. Cloud Run llega a Cloud SQL por **socket Unix** del sidecar `/cloudsql/...`, no por IP
    pública. La contraseña no está en el código: vive en Secret Manager.
 
@@ -447,9 +459,10 @@ gcloud sql connect roda-pg --user=roda_app --database=roda --project=roda-credit
 ```
 
 ```sql
-SELECT id, first_name, last_name, email, vehicle_type, monthly_payment, created_at
-FROM credit_applications
-ORDER BY created_at DESC
+SELECT c.document_number, c.first_name, c.email, a.vehicle_type, a.monthly_payment, a.created_at
+FROM credit_applications a
+JOIN customers c ON c.id = a.customer_id
+ORDER BY a.created_at DESC
 LIMIT 10;
 ```
 
