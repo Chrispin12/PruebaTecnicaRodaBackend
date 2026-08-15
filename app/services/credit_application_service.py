@@ -5,6 +5,7 @@ devuelve lo almacenado. No conoce HTTP ni SQLAlchemy; el acceso a datos vive en 
 """
 
 from app.domain.applicant import Applicant
+from app.models.credit_application import CreditApplication
 from app.repositories.credit_application_repository import CreditApplicationRepository
 from app.schemas.credit_application import CreditApplicationRequest, CreditApplicationResponse
 from app.services.credit_calculator import CreditCalculator
@@ -32,13 +33,41 @@ class CreditApplicationService:
             terms=terms,
             plan=plan,
         )
-        return CreditApplicationResponse.model_validate(application)
+        return self._to_response(application)
+
+    @staticmethod
+    def _to_response(application: CreditApplication) -> CreditApplicationResponse:
+        customer = application.customer
+        return CreditApplicationResponse(
+            id=application.id,
+            created_at=application.created_at,
+            customer_id=customer.id,
+            first_name=customer.first_name,
+            last_name=customer.last_name,
+            document_type=customer.document_type,
+            document_number=customer.document_number,
+            email=customer.email,
+            phone=customer.phone,
+            city=customer.city,
+            vehicle_type=application.vehicle_type,
+            vehicle_value=application.vehicle_value,
+            down_payment=application.down_payment,
+            financed_amount=application.financed_amount,
+            term_months=application.term_months,
+            annual_interest_rate=application.annual_interest_rate,
+            monthly_interest_rate=application.monthly_interest_rate,
+            monthly_payment=application.monthly_payment,
+            total_interest=application.total_interest,
+            total_payment=application.total_payment,
+        )
 
     @staticmethod
     def _build_applicant(request: CreditApplicationRequest) -> Applicant:
         return Applicant(
             first_name=request.first_name,
             last_name=request.last_name,
+            document_type=request.document_type,
+            document_number=request.document_number,
             email=request.email,
             phone=request.phone,
             city=request.city,

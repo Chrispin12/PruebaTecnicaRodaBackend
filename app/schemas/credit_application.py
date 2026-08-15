@@ -5,13 +5,19 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, StringConstraints, model_validator
 
 from app.domain.applicant import (
     CITY_MAX_LENGTH,
     EMAIL_MAX_LENGTH,
     NAME_MAX_LENGTH,
     PHONE_MAX_LENGTH,
+)
+from app.domain.identity import (
+    DOCUMENT_NUMBER_MAX_LENGTH,
+    DocumentType,
+    is_valid_document_number,
+    normalize_document_number,
 )
 from app.domain.vehicle import VehicleType
 from app.schemas.credit_terms import CreditTermsInput
@@ -50,6 +56,8 @@ class CreditApplicationRequest(CreditTermsInput):
             "example": {
                 "first_name": "Laura",
                 "last_name": "Gomez",
+                "document_type": "cc",
+                "document_number": "1023456789",
                 "email": "laura.gomez@example.com",
                 "phone": "3001234567",
                 "city": "Bogota",
@@ -63,6 +71,13 @@ class CreditApplicationRequest(CreditTermsInput):
 
     first_name: PersonName
     last_name: PersonName
+    document_type: DocumentType
+    document_number: Annotated[
+        str,
+        StringConstraints(
+            strip_whitespace=True, min_length=1, max_length=DOCUMENT_NUMBER_MAX_LENGTH
+        ),
+    ]
     email: Annotated[EmailStr, StringConstraints(max_length=EMAIL_MAX_LENGTH)]
     phone: Annotated[
         str,
@@ -71,6 +86,16 @@ class CreditApplicationRequest(CreditTermsInput):
         ),
     ]
     city: CityName
+
+    @model_validator(mode="after")
+    def normalize_and_validate_document(self) -> "CreditApplicationRequest":
+        number = normalize_document_number(self.document_type, self.document_number)
+        if not is_valid_document_number(self.document_type, number):
+            raise ValueError(
+                "Numero de documento invalido para el tipo indicado "
+                "(CC: 6 a 10 digitos; CE: 6 a 12; pasaporte: 5 a 15, letras y numeros)."
+            )
+        return self.model_copy(update={"document_number": number})
 
 
 class CreditApplicationResponse(BaseModel):
@@ -88,9 +113,12 @@ class CreditApplicationResponse(BaseModel):
 
     id: uuid.UUID
     created_at: datetime
+    customer_id: uuid.UUID
 
     first_name: str
     last_name: str
+    document_type: DocumentType
+    document_number: str
     # `str` y no `EmailStr`: un schema de salida describe lo que se devuelve. Validar el correo
     # otra vez al salir solo convertiria un dato corrupto en la tabla en un error 500.
     email: str

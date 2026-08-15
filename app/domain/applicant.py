@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 
+from app.domain.identity import DocumentType
+
 # Longitudes maximas de los datos del solicitante. Viven aqui, y no en el modelo ni en el
 # schema, para que el contrato de entrada y la columna de la tabla usen el mismo numero: si el
 # contrato aceptara mas de lo que cabe en la columna, el error saldria de PostgreSQL.
@@ -13,13 +15,14 @@ CITY_MAX_LENGTH = 80
 class Applicant:
     """Datos de la persona que solicita el credito (RF-05).
 
-    Existe como tipo del dominio para que el caso de uso y el repositorio no se pasen entre si
-    el schema HTTP ni una bolsa de cinco argumentos sueltos. No valida formato: eso pertenece
-    al contrato de entrada, que es donde se sabe que el dato viene de un formulario.
+    El documento de identidad es la clave natural del cliente; el correo tambien es unico.
+    No valida formato: eso pertenece al contrato de entrada.
     """
 
     first_name: str
     last_name: str
+    document_type: DocumentType
+    document_number: str
     email: str
     phone: str
     city: str

@@ -34,7 +34,7 @@ Cumple el enunciado:
 | RF-01 Formulario de simulación | `POST /api/v1/simulations` |
 | RF-02 Cálculo en backend | Motor en `app/domain` |
 | RF-03 / RF-04 Resumen y amortización | Respuesta de simulación + `schedule` |
-| RF-05 Solicitud persistida | `POST /api/v1/credit-applications` + tabla `credit_applications` |
+| RF-05 Solicitud persistida | `POST /api/v1/credit-applications` + `customers` + `credit_applications` |
 | Validaciones | Pydantic (estructura) + dominio (negocio) + CHECK en PostgreSQL |
 
 ---
@@ -234,7 +234,7 @@ El backend **vuelve a calcular** el crédito. El cliente no envía cuota ni tasa
 ```
 Request → Schema → CreditApplicationService → Credit Engine
                          ↓
-              Repository → INSERT + COMMIT → Response desde la fila
+              Repository → upsert customer + INSERT solicitud → Response
 ```
 
 **Request**
@@ -243,6 +243,8 @@ Request → Schema → CreditApplicationService → Credit Engine
 {
   "first_name": "Laura",
   "last_name": "Gomez",
+  "document_type": "cc",
+  "document_number": "1023456789",
   "email": "laura.gomez@example.com",
   "phone": "3001234567",
   "city": "Bogota",
@@ -253,8 +255,8 @@ Request → Schema → CreditApplicationService → Credit Engine
 }
 ```
 
-**Response `201`:** `id`, `created_at`, datos del solicitante, condiciones y resultado
-financiero persistido. No incluye `schedule` (es derivable; el cliente ya lo vio al simular).
+**Response `201`:** `id`, `customer_id`, `created_at`, datos del solicitante, condiciones y
+resultado financiero persistido. No incluye `schedule`. El mismo email reutiliza el cliente.
 
 Transacción atómica. Si falla la persistencia: rollback, `500` genérico al cliente, detalle
 solo en logs.
@@ -325,16 +327,16 @@ condición comercial de Roda.**
 
 ## Modelo de datos
 
-Una tabla: `credit_applications`. No hay `Customer`, `Credit` ni `PaymentInstallment`: para
-este alcance añadirían joins sin resolver un problema.
+Dos tablas: `customers` (identidad, email único) y `credit_applications` (cada crédito, FK a
+cliente). Un cliente puede tener varias solicitudes. El vehículo queda como snapshot en la
+solicitud (tipo + valor): no hay inventario ni placa, así que no hay tabla `vehicles`.
 
-| Grupo | Columnas |
+No hay login. El mismo correo reutiliza el cliente (upsert) y actualiza teléfono/ciudad.
+
+| Tabla | Qué guarda |
 | --- | --- |
-| Identidad | `id` (UUID), `created_at` (timestamptz) |
-| Solicitante | `first_name`, `last_name`, `email`, `phone`, `city` |
-| Vehículo | `vehicle_type`, `vehicle_value`, `down_payment`, `term_months` |
-| Parámetros | `annual_interest_rate`, `monthly_interest_rate` |
-| Resultado | `financed_amount`, `monthly_payment`, `total_interest`, `total_payment` |
+| `customers` | `id`, nombre, documento (tipo + número, único), `email` (único), teléfono, ciudad, `created_at` |
+| `credit_applications` | `id`, `customer_id`, vehículo, tasas usadas, resultado financiero, `created_at` |
 
 El resultado se persiste aunque sea derivable: es lo que se le presentó al solicitante. Si
 mañana cambia la tasa de demo, una solicitud antigua no debe recalcularse.
@@ -393,8 +395,6 @@ que el cliente no pueda imponer la cuota), salud, CORS en producción y pureza d
 **URL pública de la API:**
 [https://roda-credit-api-446921260054.us-central1.run.app](https://roda-credit-api-446921260054.us-central1.run.app)
 
-Informe de la prueba: [`INFORME_TECNICO.md`](./INFORME_TECNICO.md).
-
 ```
 Navegador → Vercel (SPA) → Cloud Run (esta API) → Cloud SQL (PostgreSQL 16)
 ```
@@ -406,7 +406,7 @@ Navegador → Vercel (SPA) → Cloud Run (esta API) → Cloud SQL (PostgreSQL 16
 | Proyecto GCP | `roda-credit-cs0603` |
 | Región | `us-central1` |
 | Servicio Cloud Run | `roda-credit-api` |
-| Imagen | `us-central1-docker.pkg.dev/roda-credit-cs0603/roda/roda-credit-api:v1` |
+| Imagen | `us-central1-docker.pkg.dev/roda-credit-cs0603/roda/roda-credit-api:v2` |
 | Instancia Cloud SQL | `roda-pg` (PostgreSQL 16, Enterprise, `db-f1-micro`) |
 | Conexión | `roda-credit-cs0603:us-central1:roda-pg` |
 | Base / usuario | `roda` / `roda_app` |
@@ -418,10 +418,10 @@ Navegador → Vercel (SPA) → Cloud Run (esta API) → Cloud SQL (PostgreSQL 16
 
 1. El usuario simula (`POST /api/v1/simulations`): **no se escribe en base de datos**.
 2. El usuario solicita crédito (`POST /api/v1/credit-applications`): el servidor **recalcula**
-   el plan y, en una transacción, inserta **una fila** en `credit_applications`.
-3. Esa fila guarda datos personales, condiciones del vehículo, tasas usadas y resultado
-   financiero (cuota, intereses, totales). **No** se guarda la tabla de amortización: se
-   puede regenerar con el motor.
+   el plan y, en una transacción, hace **upsert del cliente** (documento / correo) e inserta
+   una fila en `credit_applications`.
+3. En `customers` queda la identidad (documento, email, contacto). En la solicitud quedan
+   condiciones del vehículo, tasas y resultado. **No** se guarda la amortización.
 4. Cloud Run llega a Cloud SQL por **socket Unix** del sidecar `/cloudsql/...`, no por IP
    pública. La contraseña no está en el código: vive en Secret Manager.
 
@@ -491,12 +491,10 @@ administrado junto a Cloud Run. **¿Por qué no K8s/Redis/JWT?** El enunciado no
 
 ## Fuera de alcance (a propósito)
 
-Autenticación, JWT, KYC, documento de identidad, CRUD de solicitudes, microservicios.
+Autenticación, JWT, verificación KYC, CRUD de solicitudes, microservicios.
 
 ---
 
 ## Licencia / contexto
 
 Código de prueba técnica. Los supuestos financieros no representan productos reales de Roda.
-
-Informe completo: [`INFORME_TECNICO.md`](./INFORME_TECNICO.md).

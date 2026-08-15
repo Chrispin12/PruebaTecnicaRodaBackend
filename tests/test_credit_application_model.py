@@ -13,16 +13,26 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.domain.vehicle import VehicleType
-from app.models import CreditApplication
+from app.models import CreditApplication, Customer
 
 
-def build_application(**overrides: Any) -> CreditApplication:
+def build_customer(**overrides: Any) -> Customer:
     values: dict[str, Any] = {
         "first_name": "Laura",
         "last_name": "Gomez",
+        "document_type": "cc",
+        "document_number": "1023456789",
         "email": "laura.gomez@example.com",
         "phone": "3001234567",
         "city": "Bogota",
+    }
+    values.update(overrides)
+    return Customer(**values)
+
+
+def build_application(customer: Customer, **overrides: Any) -> CreditApplication:
+    values: dict[str, Any] = {
+        "customer": customer,
         "vehicle_type": VehicleType.ELECTRIC_MOTORCYCLE,
         "vehicle_value": Decimal("8000000.00"),
         "down_payment": Decimal("2000000.00"),
@@ -39,7 +49,8 @@ def build_application(**overrides: Any) -> CreditApplication:
 
 
 def test_persists_a_valid_application(db_session: Session) -> None:
-    application = build_application()
+    customer = build_customer()
+    application = build_application(customer)
 
     db_session.add(application)
     db_session.commit()
@@ -47,12 +58,13 @@ def test_persists_a_valid_application(db_session: Session) -> None:
     stored = db_session.get(CreditApplication, application.id)
     assert stored is not None
     assert stored.created_at is not None
+    assert stored.customer.email == "laura.gomez@example.com"
     assert stored.vehicle_type is VehicleType.ELECTRIC_MOTORCYCLE
 
 
 def test_money_columns_round_trip_as_decimal(db_session: Session) -> None:
     """Los importes deben volver como Decimal: un float aqui significaria perder centavos."""
-    application = build_application(vehicle_value=Decimal("8000000.55"))
+    application = build_application(build_customer(), vehicle_value=Decimal("8000000.55"))
 
     db_session.add(application)
     db_session.commit()
@@ -86,7 +98,7 @@ def test_money_columns_round_trip_as_decimal(db_session: Session) -> None:
 def test_rejects_values_that_violate_business_invariants(
     db_session: Session, overrides: dict[str, Any], constraint: str
 ) -> None:
-    db_session.add(build_application(**overrides))
+    db_session.add(build_application(build_customer(), **overrides))
 
     with pytest.raises(IntegrityError) as error:
         db_session.commit()
@@ -99,13 +111,12 @@ def test_rejects_unknown_vehicle_type(db_session: Session) -> None:
 
     Lo que se comprueba aqui es el CHECK de la base de datos.
     """
+    customer = build_customer()
+    db_session.add(customer)
+    db_session.flush()
     values = {
         "id": "11111111-1111-1111-1111-111111111111",
-        "first_name": "Laura",
-        "last_name": "Gomez",
-        "email": "laura.gomez@example.com",
-        "phone": "3001234567",
-        "city": "Bogota",
+        "customer_id": str(customer.id),
         "vehicle_type": "gasoline_motorcycle",
         "vehicle_value": Decimal("8000000.00"),
         "down_payment": Decimal("2000000.00"),

@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from app.domain.rules import MAX_TERM_MONTHS
 from app.domain.vehicle import VehicleType
 from app.main import app
-from app.models import CreditApplication
+from app.models import CreditApplication, Customer
 
 APPLICATIONS_URL = "/api/v1/credit-applications"
 
@@ -28,7 +28,15 @@ EXPECTED_TOTAL_INTEREST = Decimal("1449499.98")
 EXPECTED_TOTAL_PAYMENT = Decimal("7449499.98")
 EXPECTED_MONTHLY_RATE = Decimal("0.018088")
 
-APPLICANT_FIELDS = ("first_name", "last_name", "email", "phone", "city")
+APPLICANT_FIELDS = (
+    "first_name",
+    "last_name",
+    "document_type",
+    "document_number",
+    "email",
+    "phone",
+    "city",
+)
 TERMS_FIELDS = ("vehicle_type", "vehicle_value", "down_payment", "term_months")
 
 
@@ -36,6 +44,8 @@ def valid_payload(**overrides: object) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "first_name": "Laura",
         "last_name": "Gomez",
+        "document_type": "cc",
+        "document_number": "1023456789",
         "email": "laura.gomez@example.com",
         "phone": "3001234567",
         "city": "Bogota",
@@ -66,9 +76,12 @@ class TestSuccessfulRegistration:
         assert response.status_code == 201
         body = response.json()
         assert body["id"]
+        assert body["customer_id"]
         assert body["created_at"]
         assert body["first_name"] == "Laura"
         assert body["last_name"] == "Gomez"
+        assert body["document_type"] == "cc"
+        assert body["document_number"] == "1023456789"
         assert body["email"] == "laura.gomez@example.com"
         assert body["phone"] == "3001234567"
         assert body["city"] == "Bogota"
@@ -114,9 +127,10 @@ class TestPersistence:
 
         stored = db_session.get(CreditApplication, response.json()["id"])
         assert stored is not None
-        assert stored.first_name == "Laura"
-        assert stored.email == "laura.gomez@example.com"
-        assert stored.city == "Bogota"
+        assert stored.customer.first_name == "Laura"
+        assert stored.customer.document_number == "1023456789"
+        assert stored.customer.email == "laura.gomez@example.com"
+        assert stored.customer.city == "Bogota"
         assert stored.vehicle_type is VehicleType.ELECTRIC_MOTORCYCLE
         assert stored.term_months == 24
         assert stored.created_at is not None
@@ -329,6 +343,90 @@ class TestCalculationIsServerSide:
         assert stored.financed_amount == Decimal("3765432.11")
         assert stored.total_payment == stored.financed_amount + stored.total_interest
         assert stored.monthly_payment != EXPECTED_MONTHLY_PAYMENT
+
+
+class TestCustomerRelationship:
+    def test_reuses_the_same_customer_for_a_second_application(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        first = client.post(APPLICATIONS_URL, json=valid_payload()).json()
+        second = client.post(
+            APPLICATIONS_URL,
+            json=valid_payload(vehicle_value="9000000.00", down_payment="2000000.00"),
+        ).json()
+
+        assert first["customer_id"] == second["customer_id"]
+        assert first["id"] != second["id"]
+        customers = db_session.scalars(select(Customer)).all()
+        applications = db_session.scalars(select(CreditApplication)).all()
+        assert len(customers) == 1
+        assert len(applications) == 2
+
+    def test_updates_contact_details_on_the_existing_customer(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        client.post(APPLICATIONS_URL, json=valid_payload())
+        client.post(
+            APPLICATIONS_URL,
+            json=valid_payload(phone="3109876543", city="Medellin"),
+        )
+
+        customer = db_session.scalar(
+            select(Customer).where(Customer.email == "laura.gomez@example.com")
+        )
+        assert customer is not None
+        assert customer.phone == "3109876543"
+        assert customer.city == "Medellin"
+
+    def test_normalizes_email_case_to_reuse_the_customer(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        first = client.post(APPLICATIONS_URL, json=valid_payload()).json()
+        second = client.post(
+            APPLICATIONS_URL,
+            json=valid_payload(email="Laura.Gomez@example.com"),
+        ).json()
+
+        assert first["customer_id"] == second["customer_id"]
+        assert stored_applications(db_session) == 2
+        assert db_session.scalar(select(func.count()).select_from(Customer)) == 1
+
+    def test_rejects_the_same_email_with_a_different_document(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        client.post(APPLICATIONS_URL, json=valid_payload())
+        response = client.post(
+            APPLICATIONS_URL,
+            json=valid_payload(document_number="1098765432"),
+        )
+
+        assert response.status_code == 400
+        assert "documento" in response.json()["error"]["message"].lower()
+        assert stored_applications(db_session) == 1
+
+    def test_rejects_the_same_document_bound_to_another_email(
+        self, client: TestClient, db_session: Session
+    ) -> None:
+        client.post(APPLICATIONS_URL, json=valid_payload())
+        response = client.post(
+            APPLICATIONS_URL,
+            json=valid_payload(
+                email="otra.persona@example.com",
+                document_number="1023456789",
+            ),
+        )
+
+        # Mismo documento: se reutiliza el cliente y se actualiza el correo si esta libre.
+        assert response.status_code == 201
+        assert stored_applications(db_session) == 2
+        assert db_session.scalar(select(func.count()).select_from(Customer)) == 1
+
+    def test_rejects_an_invalid_national_id(self, client: TestClient) -> None:
+        response = client.post(
+            APPLICATIONS_URL, json=valid_payload(document_type="cc", document_number="12")
+        )
+
+        assert response.status_code == 422
 
     def test_the_registration_matches_the_simulation_for_the_same_terms(
         self, client: TestClient

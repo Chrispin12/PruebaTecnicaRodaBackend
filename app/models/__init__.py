@@ -4,5 +4,6 @@ Se importan aqui para que `Base.metadata` este completo cuando Alembic haga auto
 """
 
 from app.models.credit_application import CreditApplication
+from app.models.customer import Customer
 
-__all__ = ["CreditApplication"]
+__all__ = ["CreditApplication", "Customer"]

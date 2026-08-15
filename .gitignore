@@ -8,3 +8,5 @@ __pycache__/
 *.egg-info/
 build/
 dist/
+INFORME_TECNICO.md
+INFORME_TECNICO.pdf
