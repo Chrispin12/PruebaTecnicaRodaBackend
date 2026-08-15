@@ -1,0 +1,64 @@
+# Entorno de desarrollo local: API + PostgreSQL.
+# En produccion la base es Cloud SQL; este contenedor de Postgres es solo para desarrollo.
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      # Puerto del host configurable: si ya tienes un PostgreSQL local en 5432,
+      # define POSTGRES_PORT=5433 en tu .env y ajusta las URLs de conexion.
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-test-db.sql:/docker-entrypoint-initdb.d/init-test-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    # Toma la configuracion del .env (tasas incluidas) y sobrescribe abajo solo lo que cambia
+    # dentro de la red de compose. Lo declarado en `environment` tiene prioridad sobre el
+    # env_file, asi que DATABASE_URL apunta al servicio db y no a localhost.
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      ENVIRONMENT: ${ENVIRONMENT:-local}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://localhost:5173}
+      # Da prioridad al codigo montado sobre la copia instalada en el venv.
+      PYTHONPATH: /app
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./app:/app/app:ro
+      - ./alembic:/app/alembic:ro
+    # Aplicar las migraciones al arrancar es aceptable aqui porque hay una sola instancia. En
+    # produccion NO se hace asi: varias instancias de Cloud Run migrarian a la vez. Alli es un
+    # Cloud Run Job separado, documentado en el README.
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /app/app"
+    # Usa el interprete de la imagen en lugar de curl, que no esta instalado. Permite que
+    # `docker compose up --wait` solo devuelva el control cuando la API responde de verdad.
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'python -c "import urllib.request; urllib.request.urlopen(''http://localhost:8000/health'')"',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  postgres_data:

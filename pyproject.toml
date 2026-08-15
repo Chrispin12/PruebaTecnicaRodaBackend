@@ -1,0 +1,46 @@
+[project]
+name = "roda-credit-api"
+version = "0.1.0"
+description = "API de simulacion y registro de creditos para movilidad electrica"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115,<1.0",
+    "uvicorn[standard]>=0.30,<1.0",
+    # El extra [email] instala email-validator, que respalda EmailStr: validar el correo del
+    # solicitante en el contrato evita guardar direcciones a las que nunca se podra escribir.
+    "pydantic[email]>=2.9,<3.0",
+    "pydantic-settings>=2.5,<3.0",
+    "sqlalchemy>=2.0.36,<2.1",
+    "alembic>=1.14,<2.0",
+    "psycopg[binary]>=3.2,<4.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3,<9.0",
+    # Cliente HTTP que usa TestClient de Starlette; las versiones actuales piden httpx2.
+    "httpx2>=2.10,<3.0",
+    "ruff>=0.8,<1.0",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "C4", "RUF"]
+
+[tool.ruff.lint.isort]
+# El directorio ./alembic hace que ruff tome "alembic" por modulo propio; no lo es.
+known-third-party = ["alembic"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
